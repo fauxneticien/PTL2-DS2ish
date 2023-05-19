@@ -2,63 +2,45 @@ import lightning.pytorch as pl
 
 from torch import Tensor
 from typing import Dict, Tuple, Union, List
+from ._utils import TextTransform
 
 import torch
+import torch.nn as nn
 import torchaudio
 
-class CollateFnLibriLightLimited:
-    """The collate class for LibriSpeech or LibriLightLimited dataset."""
+text_transform = TextTransform()
 
-    def __call__(self, batch: List[Tuple[Tensor, int, str, int, int, int]]) -> Tuple[Tensor, Tensor, Tensor]:
-        """
-        Args:
-            batch (List(Tuple(Tensor, int, str, int, int, int))):
-                The list of tuples that contains
-                waveform, sample_rate, transcript, speaker_id, chapter_id, and utterance_id.
+train_audio_transforms = nn.Sequential(
+    torchaudio.transforms.MelSpectrogram(sample_rate=16000, n_mels=128),
+    torchaudio.transforms.FrequencyMasking(freq_mask_param=30),
+    torchaudio.transforms.TimeMasking(time_mask_param=100)
+)
 
-        Returns:
-            (Tuple(Tensor, Tensor, Tensor, Tensor)):
-                The Tensor of waveforms with dimensions `(batch, time)`.
-                The Tensor of labels with dimensions `(batch, seq)`.
-                The Tensor of audio lengths with dimensions `(batch,)`.
-                The Tensor of length lengths with dimensions `(batch,)`.
+valid_audio_transforms = torchaudio.transforms.MelSpectrogram()
 
-        """
-        audio_sizes = [sample[0].shape[1] for sample in batch]
-        audio_size = max(audio_sizes)
-        waveforms, labels, audio_lengths, label_lengths = [], [], [], []
-        label2id = _get_label2id()
-        for sample in batch:
-            waveform, transcript = sample[0], sample[2]
-            # add one "|" symbol after the end of transcription as the word termination
-            transcript = transcript + "|"
-            label = torch.tensor([label2id[e] for e in transcript.replace(" ", "|").upper()])
-            audio_length = waveform.size(1)
-            label_length = label.size(0)
-            waveforms.append(waveform)
-            audio_lengths.append(audio_length)
-            label_lengths.append(label_length)
-            labels.append(label)
+def data_processing(data, data_type="train"):
 
-        data = torch.zeros(len(batch), audio_size)
-        for i in range(len(waveforms)):
-            data[i][0 : waveforms[i].shape[1]] = waveforms[i]
-        audio_lengths = torch.tensor(audio_lengths)
-        label_lengths = torch.tensor(label_lengths)
-        labels = torch.nn.utils.rnn.pad_sequence(labels, batch_first=True, padding_value=-1)
-        return data, labels.int(), audio_lengths.int(), label_lengths.int()
+    spectrograms = []
+    labels = []
+    input_lengths = []
+    label_lengths = []
+    for (waveform, _, utterance, _, _, _) in data:
+        if data_type == 'train':
+            spec = train_audio_transforms(waveform).squeeze(0).transpose(0, 1)
+        elif data_type == 'valid':
+            spec = valid_audio_transforms(waveform).squeeze(0).transpose(0, 1)
+        else:
+            raise Exception('data_type should be train or valid')
+        spectrograms.append(spec)
+        label = torch.Tensor(text_transform.text_to_int(utterance.lower()))
+        labels.append(label)
+        input_lengths.append(spec.shape[0]//2)
+        label_lengths.append(len(label))
 
-def _get_id2label() -> Dict:
-    """Get the dictionary that maps indices of ASR model's last layer dimension to the corresponding labels."""
-    bundle = torchaudio.pipelines.HUBERT_ASR_LARGE
-    labels = bundle.get_labels()
-    return {i: char.lower() for i, char in enumerate(labels)}
+    spectrograms = nn.utils.rnn.pad_sequence(spectrograms, batch_first=True).unsqueeze(1).transpose(2, 3)
+    labels = nn.utils.rnn.pad_sequence(labels, batch_first=True)
 
-def _get_label2id() -> Dict:
-    """Get the dictionary that maps the labels to the corresponding indices in ASR model's last dimension."""
-    bundle = torchaudio.pipelines.HUBERT_ASR_LARGE
-    labels = bundle.get_labels()
-    return {char: i for i, char in enumerate(labels)}
+    return spectrograms, labels, input_lengths, label_lengths
 
 class LibrisDataModule(pl.LightningDataModule):
     def __init__(
@@ -71,29 +53,21 @@ class LibrisDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
 
     def train_dataloader(self):
-        dataset = torchaudio.datasets.LibriLightLimited(self.dataset_path, subset="10min")
-
-        # Try to over-fit to single data point
-        dataset = torch.utils.data.Subset(dataset, [0])
+        dataset = torchaudio.datasets.LIBRISPEECH(self.dataset_path, "train-clean-100")
         return torch.utils.data.DataLoader(
             dataset,
             batch_size=self.batch_size,
-            collate_fn=CollateFnLibriLightLimited(),
+            collate_fn=lambda x: data_processing(x, 'train'),
             shuffle=False,
             num_workers=8,
         )
 
     def val_dataloader(self):
-        # dataset = torchaudio.datasets.LIBRISPEECH(self.dataset_path, "dev-other")
-        # dataset = torch.utils.data.Subset(dataset, list(range(0, len(dataset), 2)))
-
-        # Try to over-fit to single data point
-        dataset = torchaudio.datasets.LibriLightLimited(self.dataset_path, subset="10min")
-        dataset = torch.utils.data.Subset(dataset, [0])
+        dataset = torchaudio.datasets.LIBRISPEECH(self.dataset_path, "test-clean")
         return torch.utils.data.DataLoader(
             dataset,
             batch_size=self.batch_size,
-            collate_fn=CollateFnLibriLightLimited(),
+            collate_fn=lambda x: data_processing(x, 'valid'),
             shuffle=False,
             num_workers=8,
         )

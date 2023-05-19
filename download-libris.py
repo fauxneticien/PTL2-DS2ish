@@ -1,7 +1,5 @@
 import torchaudio
 
-print("Downloading LibriSpeech dev-other into data directory...")
-librispeech_dev_other = torchaudio.datasets.LIBRISPEECH("./data", "dev-other", download=True)
-
-print("Downloading LibriLight into data directory...")
-librilight_1h = torchaudio.datasets.LibriLightLimited("./data", download=True)
+print("Downloading LibriSpeech train-clean-100 and test-clean into data directory...")
+librispeech_train_clean100 = torchaudio.datasets.LIBRISPEECH("./data", "train-clean-100", download=True)
+librispeech_test_clean = torchaudio.datasets.LIBRISPEECH("./data", "test-clean", download=True)
