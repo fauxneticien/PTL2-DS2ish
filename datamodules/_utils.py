@@ -1,3 +1,7 @@
+from typing import Any
+import torch
+import torchaudio
+
 class TextTransform:
     # Adapted from https://www.assemblyai.com/blog/end-to-end-speech-recognition-pytorch/
 
@@ -58,3 +62,40 @@ class TextTransform:
         for i in labels:
             string.append(self.index_map[i])
         return ''.join(string).replace('<SPACE>', ' ')
+
+class MelSpecWithTrainSpecAug:
+
+    def __init__(self, n_mels=128, sample_rate=16_000, freq_mask_param=30, time_mask_param=100):
+        self.train_audio_transforms = torch.nn.Sequential(
+            torchaudio.transforms.MelSpectrogram(sample_rate=sample_rate, n_mels=n_mels),
+            torchaudio.transforms.FrequencyMasking(freq_mask_param=freq_mask_param),
+            torchaudio.transforms.TimeMasking(time_mask_param=time_mask_param)
+        )
+
+        self.valid_audio_transforms = torchaudio.transforms.MelSpectrogram(sample_rate=sample_rate, n_mels=n_mels)
+
+    def train_transform(self, waveform):
+        return self.train_audio_transforms(waveform)
+    
+    def valid_transform(self, waveform):
+        return self.valid_audio_transforms(waveform)
+
+class GreedyDecoder:
+
+    def __init__(self, text_transform):
+        self.text_transform = text_transform
+
+    def __call__(self, output, labels, label_lengths, blank_label=28, collapse_repeated=True):
+        arg_maxes = torch.argmax(output, dim=2)
+        decodes = []
+        targets = []
+        for i, args in enumerate(arg_maxes):
+            decode = []
+            targets.append(self.text_transform.int_to_text(labels[i][:label_lengths[i]].tolist()))
+            for j, index in enumerate(args):
+                if index != blank_label:
+                    if collapse_repeated and j != 0 and index == args[j -1]:
+                        continue
+                    decode.append(index.item())
+            decodes.append(self.text_transform.int_to_text(decode))
+        return decodes, targets

@@ -1,9 +1,11 @@
 # DeepSpeech2ishModel adapted from https://www.assemblyai.com/blog/end-to-end-speech-recognition-pytorch/
 
+import jiwer
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import lightning.pytorch as pl
+
 
 class CNNLayerNorm(nn.Module):
     """Layer normalization built for cnns input"""
@@ -102,12 +104,17 @@ class DeepSpeech2ishModel(nn.Module):
     
 class DeepSpeech2ishLightningModule(pl.LightningModule):
 
-    def __init__(self, model: torch.nn.Module):
+    def __init__(self, model: torch.nn.Module, eval_decoder):
         super(DeepSpeech2ishLightningModule, self).__init__()
         self.model = model
         self.ctc_loss = torch.nn.CTCLoss(blank=28)
         # Important: This property activates manual optimization.
         self.automatic_optimization = False
+
+        self.eval_decoder=eval_decoder
+        self.val_losses = []
+        self.val_wers = []
+        self.val_cers = []
 
     def training_step(self, batch, batch_idx):
         spectrograms, labels, input_lengths, label_lengths = batch 
@@ -129,17 +136,29 @@ class DeepSpeech2ishLightningModule(pl.LightningModule):
         self.log("train/loss", loss.item(), prog_bar=True, sync_dist=True)
 
     def validation_step(self, batch, batch_idx):
-        spectrograms, labels, input_lengths, label_lengths = batch 
+        spectrograms, labels, input_lengths, label_lengths = batch
         outputs = self.model(spectrograms)
 
         outputs = F.log_softmax(outputs, dim=2)
         outputs = outputs.transpose(0, 1) # (time, batch, n_class)
 
         loss = self.ctc_loss(outputs, labels, input_lengths, label_lengths)
+        self.val_losses.append(loss.item())
 
-        self.log("valid/loss", loss.item(), sync_dist=True)
+        decoded_preds, decoded_targets = self.eval_decoder(outputs.transpose(0, 1), labels, label_lengths)
+        self.val_wers.append(jiwer.wer(decoded_targets, decoded_preds))
+        self.val_cers.append(jiwer.cer(decoded_targets, decoded_preds))
 
         return loss
+    
+    def on_validation_epoch_end(self, *_):
+        self.log("valid/loss", sum(self.val_losses)/len(self.val_losses))
+        self.log("valid/wer", sum(self.val_wers)/len(self.val_wers))
+        self.log("valid/cer", sum(self.val_cers)/len(self.val_cers))
+        
+        self.val_losses.clear()
+        self.val_wers.clear()
+        self.val_cers.clear()
     
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=5e-4)

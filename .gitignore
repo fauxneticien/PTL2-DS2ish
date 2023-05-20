@@ -7,3 +7,6 @@ data/*
 !tmp/.gitkeep
 !data/.gitkeep
 outputs
+lightning_logs/
+wandb/
+.ipynb_checkpoints/

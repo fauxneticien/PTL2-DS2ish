@@ -1,3 +1,4 @@
+import argparse
 import os
 from comet_ml import Experiment
 import torch
@@ -7,6 +8,18 @@ import torch.optim as optim
 import torch.nn.functional as F
 import torchaudio
 import numpy as np
+import tqdm
+import jiwer
+
+parser = argparse.ArgumentParser(description='Train a DeepSpeech2ish model using PyTorch Lightning.')
+parser.add_argument('--random_seed', type=int, default=3)
+args = parser.parse_args()
+
+import wandb
+wandb.init(
+    project='PLT2-DeepSpeech2ish',
+    name=f"ASM, seed={args.random_seed}"
+)
 
 def avg_wer(wer_scores, combined_ref_len):
     return float(sum(wer_scores)) / float(combined_ref_len)
@@ -423,13 +436,11 @@ def train(model, device, train_loader, criterion, optimizer, scheduler, epoch, i
             loss = criterion(output, labels, input_lengths, label_lengths)
             loss.backward()
 
-            experiment.log_metric('loss', loss.item(), step=iter_meter.get())
-            experiment.log_metric('learning_rate', scheduler.get_lr(), step=iter_meter.get())
-
             optimizer.step()
             scheduler.step()
             iter_meter.step()
             if batch_idx % 100 == 0 or batch_idx == data_len:
+                wandb.log({"train/loss": loss.item(), "lr-AdamW": scheduler.get_last_lr()[0] })
                 print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                     epoch, batch_idx * len(spectrograms), data_len,
                     100. * batch_idx / len(train_loader), loss.item()))
@@ -442,7 +453,7 @@ def test(model, device, test_loader, criterion, epoch, iter_meter, experiment):
     test_cer, test_wer = [], []
     with experiment.test():
         with torch.no_grad():
-            for i, _data in enumerate(test_loader):
+            for i, _data in tqdm.tqdm(enumerate(test_loader), total=len(test_loader)):
                 spectrograms, labels, input_lengths, label_lengths = _data 
                 spectrograms, labels = spectrograms.to(device), labels.to(device)
 
@@ -454,16 +465,16 @@ def test(model, device, test_loader, criterion, epoch, iter_meter, experiment):
                 test_loss += loss.item() / len(test_loader)
 
                 decoded_preds, decoded_targets = GreedyDecoder(output.transpose(0, 1), labels, label_lengths)
-                for j in range(len(decoded_preds)):
-                    test_cer.append(cer(decoded_targets[j], decoded_preds[j]))
-                    test_wer.append(wer(decoded_targets[j], decoded_preds[j]))
-
+                test_cer.append(jiwer.cer(decoded_targets, decoded_preds))
+                test_wer.append(jiwer.wer(decoded_targets, decoded_preds))
 
     avg_cer = sum(test_cer)/len(test_cer)
     avg_wer = sum(test_wer)/len(test_wer)
     experiment.log_metric('test_loss', test_loss, step=iter_meter.get())
     experiment.log_metric('cer', avg_cer, step=iter_meter.get())
     experiment.log_metric('wer', avg_wer, step=iter_meter.get())
+
+    wandb.log({"valid/loss": test_loss, "valid/wer":avg_wer, "valid/cer":avg_cer})
 
     print('Test set: Average loss: {:.4f}, Average CER: {:4f} Average WER: {:.4f}\n'.format(test_loss, avg_cer, avg_wer))
 
@@ -488,8 +499,11 @@ def main(learning_rate=5e-4, batch_size=20, epochs=10,
     experiment.log_parameters(hparams)
 
     use_cuda = torch.cuda.is_available()
-    torch.manual_seed(7)
+    torch.manual_seed(args.random_seed)
     device = torch.device("cuda" if use_cuda else "cpu")
+
+    # torch.backends.cudnn.deterministic = True
+    # torch.use_deterministic_algorithms(True)
 
     if not os.path.isdir("./data"):
         os.makedirs("./data")
@@ -497,19 +511,28 @@ def main(learning_rate=5e-4, batch_size=20, epochs=10,
     train_dataset = torchaudio.datasets.LIBRISPEECH("./data", url=train_url)
     test_dataset = torchaudio.datasets.LIBRISPEECH("./data", url=test_url)
 
-    train_dataset=torch.utils.data.Subset(train_dataset, range(10))
-    test_dataset=train_dataset
+    # For debugging, do manual shuffle of training data:
+    indices=np.arange(len(train_dataset))
+    rng = np.random.default_rng(seed=args.random_seed)
+    rng.shuffle(indices)
+    train_dataset = torch.utils.data.Subset(train_dataset, indices)
+    print(f"Train indices: {indices}")
+
+    g = torch.Generator()
+    g.manual_seed(7)
 
     kwargs = {'num_workers': 1, 'pin_memory': True} if use_cuda else {}
     train_loader = data.DataLoader(dataset=train_dataset,
                                 batch_size=hparams['batch_size'],
-                                shuffle=True,
+                                shuffle=False,
                                 collate_fn=lambda x: data_processing(x, 'train'),
+                                generator=g,
                                 **kwargs)
     test_loader = data.DataLoader(dataset=test_dataset,
                                 batch_size=hparams['batch_size'],
                                 shuffle=False,
                                 collate_fn=lambda x: data_processing(x, 'valid'),
+                                generator=g,
                                 **kwargs)
 
     model = SpeechRecognitionModel(
