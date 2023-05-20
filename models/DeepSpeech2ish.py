@@ -106,19 +106,27 @@ class DeepSpeech2ishLightningModule(pl.LightningModule):
         super(DeepSpeech2ishLightningModule, self).__init__()
         self.model = model
         self.ctc_loss = torch.nn.CTCLoss(blank=28)
+        # Important: This property activates manual optimization.
+        self.automatic_optimization = False
 
     def training_step(self, batch, batch_idx):
         spectrograms, labels, input_lengths, label_lengths = batch 
-        outputs = self.model(spectrograms)
+        
+        opt = self.optimizers()
+        opt.zero_grad()
 
+        outputs = self.model(spectrograms)
         outputs = F.log_softmax(outputs, dim=2)
         outputs = outputs.transpose(0, 1) # (time, batch, n_class)
-
+ 
         loss = self.ctc_loss(outputs, labels, input_lengths, label_lengths)
+        self.manual_backward(loss)
+        opt.step()
+
+        sch = self.lr_schedulers()
+        sch.step()
 
         self.log("train/loss", loss.item(), prog_bar=True, sync_dist=True)
-
-        return loss
 
     def validation_step(self, batch, batch_idx):
         spectrograms, labels, input_lengths, label_lengths = batch 
