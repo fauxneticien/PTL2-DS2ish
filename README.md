@@ -1,4 +1,4 @@
-# PTL2-DS2
+# PTL2-DS2ish
 
 This repository takes [AssemblyAI's end-to-end ASR tutorial](https://www.assemblyai.com/blog/end-to-end-speech-recognition-pytorch/) by [Michael Nguyen](https://www.assemblyai.com/blog/author/michael/) as a starting point and converts the training code to be compatible with the latest PyTorch Lightning release (2.0.2 as of May 2023), mainly relying on the official PyTorch Lightning [preparation guide](https://lightning.ai/docs/pytorch/stable/starter/converting.html) and the [DNN Beamformer example](https://github.com/pytorch/audio/tree/main/examples/dnn_beamformer) by [
 Zhaoheng Ni](https://nateanl.github.io/) in torchaudio as a template.
