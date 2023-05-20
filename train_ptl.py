@@ -19,7 +19,7 @@ wandb_logger = pl.loggers.WandbLogger(
 lr_monitor = pl.callbacks.LearningRateMonitor(logging_interval='step')
 
 trainer = pl.trainer.trainer.Trainer(
-    max_epochs=2,
+    max_epochs=100,
     accelerator="gpu",
     devices=1,
     check_val_every_n_epoch=1,
