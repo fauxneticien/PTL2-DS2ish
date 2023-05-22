@@ -559,7 +559,7 @@ experiment = Experiment(api_key='dummy_key', disabled=True)
 
 learning_rate = 5e-4
 batch_size = 10
-epochs = 100
+epochs = 30
 libri_train_set = "train-clean-100"
 libri_test_set = "test-clean"
 

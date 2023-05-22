@@ -19,7 +19,7 @@ wandb_logger = pl.loggers.WandbLogger(
 lr_monitor = pl.callbacks.LearningRateMonitor(logging_interval='step')
 
 trainer = pl.trainer.trainer.Trainer(
-    max_epochs=100,
+    max_epochs=30,
     accelerator="gpu",
     devices=1,
     check_val_every_n_epoch=1,
@@ -43,3 +43,5 @@ model_module = DeepSpeech2ishLightningModule(
 )
 
 trainer.fit(model_module, datamodule=data_module)
+
+trainer.save_checkpoint(f"checkpoints/DS2ish_ptl_seed-{args.random_seed}.ckpt", weights_only=True)
